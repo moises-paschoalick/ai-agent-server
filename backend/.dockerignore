@@ -1,0 +1,24 @@
+# Secrets and runtime data never go into the image
+.env
+.env.*
+!.env.example
+data/
+
+# Build output, IDE and tooling
+build/
+.gradle/
+.idea/
+.vscode/
+.claude/
+*.iml
+out/
+bin/
+
+# Not needed to build the jar
+.git/
+.github/
+docker-compose*.yml
+Dockerfile
+README.md
+HELP.md
+FLOW*.md

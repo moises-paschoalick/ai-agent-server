@@ -1,0 +1,28 @@
+# Build context of the single image (Dockerfile at the root): only backend/, frontend/ and docker/ are used
+
+# Secrets and runtime data never go into the image
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+data/
+**/data/
+
+# Build output, dependencies, IDE and tooling
+**/build/
+**/.gradle/
+**/node_modules/
+**/dist/
+**/out/
+**/bin/
+.idea/
+.vscode/
+.claude/
+**/*.iml
+**/*.log
+
+# Not needed to build the image
+.git/
+.github/
+examples/

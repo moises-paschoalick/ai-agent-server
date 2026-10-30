@@ -1,0 +1,92 @@
+# Rendered by entrypoint.sh (envsubst): PORT, BACKEND_PORT, AGENT_API_KEY, AUTH_REALM.
+# Runs as a non-root user: pid, temp files and htpasswd live in /tmp/nginx.
+worker_processes auto;
+pid /tmp/nginx/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log off;
+    sendfile on;
+    server_tokens off;
+
+    client_body_temp_path /tmp/nginx/body;
+    proxy_temp_path /tmp/nginx/proxy;
+    fastcgi_temp_path /tmp/nginx/fastcgi;
+    uwsgi_temp_path /tmp/nginx/uwsgi;
+    scgi_temp_path /tmp/nginx/scgi;
+
+    upstream backend {
+        server 127.0.0.1:${BACKEND_PORT};
+        keepalive 16;
+    }
+
+    server {
+        listen ${PORT};
+        server_name _;
+        root /usr/share/nginx/html;
+        client_max_body_size 10m;
+
+        # Basic auth on the playground; off when FRONTEND_USER/FRONTEND_PASSWORD are not set
+        auth_basic "${AUTH_REALM}";
+        auth_basic_user_file /tmp/nginx/htpasswd;
+
+        # Streamed answers (text/event-stream) reach the client piece by piece: no buffering,
+        # HTTP/1.1 to the backend, and a read timeout above the model's
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+
+        # Container healthcheck of nginx alone; /health below checks the backend
+        location = /healthz {
+            auth_basic off;
+            default_type text/plain;
+            return 200 "ok";
+        }
+
+        location = /health {
+            auth_basic off;
+            proxy_pass http://backend;
+            proxy_set_header Connection "";
+        }
+
+        # OpenAI-compatible API: clients send their own key (one of AGENT_API_KEYS)
+        location /v1/ {
+            auth_basic off;
+            proxy_pass http://backend;
+            proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        # Playground: the browser only calls /api; the key is added here and never reaches it
+        location /api/ {
+            proxy_pass http://backend/;
+            proxy_set_header Authorization "Bearer ${AGENT_API_KEY}";
+            proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        # Requests with a bearer key go to the backend as they are (/chat, /tools, /audit...),
+        # so clients use the same URLs as on a standalone backend; the rest is the playground
+        location / {
+            error_page 418 = @backend;
+            if ($http_authorization ~* "^Bearer ") {
+                return 418;
+            }
+            try_files $uri /index.html;
+        }
+
+        location @backend {
+            auth_basic off;
+            proxy_pass http://backend;
+            proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}

@@ -1,0 +1,38 @@
+# Rendered at container start (envsubst): PORT, BACKEND_URL, AGENT_API_KEY.
+# The API key is added here, on the server side; the browser only ever calls /api on this origin.
+server {
+    listen ${PORT};
+    server_name _;
+
+    # Basic auth when FRONTEND_USER and FRONTEND_PASSWORD are set (written by 15-basic-auth.sh)
+    include /etc/nginx/auth.conf;
+
+    root /usr/share/nginx/html;
+
+    # Container healthcheck: always open, even with basic auth on; tells nothing about the backend
+    location = /healthz {
+        auth_basic off;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        proxy_pass ${BACKEND_URL}/;
+        # Replaces whatever the browser sent, including its basic auth credentials
+        proxy_set_header Authorization "Bearer ${AGENT_API_KEY}";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Streamed answers (text/event-stream) must reach the browser piece by piece: no buffering,
+        # HTTP/1.1 to the backend, and a read timeout above the model's (the backend also sends X-Accel-Buffering: no)
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+}

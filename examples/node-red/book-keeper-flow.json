@@ -1,0 +1,809 @@
+[
+  {
+    "id": "bk-tab",
+    "type": "tab",
+    "label": "Book Keeper (Telegram)",
+    "disabled": false,
+    "info": "Atendente de livraria no Telegram com o Agent Server (API de Assistants).\n\nTelegram -> usuário no PostgreSQL (schema bookkeeper) -> thread do usuário -> mensagem -> run -> polling\n-> get_books no PostgreSQL + submit_tool_outputs -> resposta no Telegram.\n\nVariáveis (globais do Node-RED ou do sistema): ASSISTANTS_BASE_URL, ASSISTANTS_API_KEY, BOOKKEEPER_ASSISTANT_ID,\nBOOKKEEPER_PGHOST, BOOKKEEPER_PGPORT, BOOKKEEPER_PGDATABASE. Credenciais no editor: usuário e senha do PostgreSQL e o token do bot.\nSchema: book-keeper-schema.sql. Assistant: book-keeper-assistant.json."
+  },
+  {
+    "id": "bk-bot",
+    "type": "telegram bot",
+    "botname": "BookKeeperBot",
+    "usernames": "",
+    "chatids": "",
+    "baseapiurl": "",
+    "testenvironment": false,
+    "updatemode": "polling",
+    "addressfamily": "",
+    "pollinterval": 300,
+    "usesocks": false,
+    "sockshost": "",
+    "socksprotocol": "socks5",
+    "socksport": 6667,
+    "socksusername": "anonymous",
+    "sockspassword": "",
+    "bothost": "",
+    "botpath": "",
+    "localbotport": 8443,
+    "publicbotport": 8443,
+    "privatekey": "",
+    "certificate": "",
+    "useselfsignedcertificate": false,
+    "sslterminated": false,
+    "verboselogging": false
+  },
+  {
+    "id": "bk-pg",
+    "type": "postgreSQLConfig",
+    "name": "Agent Server PostgreSQL",
+    "host": "${BOOKKEEPER_PGHOST}",
+    "hostFieldType": "str",
+    "port": "${BOOKKEEPER_PGPORT}",
+    "portFieldType": "num",
+    "database": "${BOOKKEEPER_PGDATABASE}",
+    "databaseFieldType": "str",
+    "ssl": "false",
+    "sslFieldType": "bool",
+    "applicationName": "node-red-bookkeeper",
+    "applicationNameType": "str",
+    "max": "5",
+    "maxFieldType": "num",
+    "idle": "1000",
+    "idleFieldType": "num",
+    "connectionTimeout": "10000",
+    "connectionTimeoutFieldType": "num",
+    "userFieldType": "cred",
+    "passwordFieldType": "cred"
+  },
+  {
+    "id": "bk-in",
+    "type": "telegram receiver",
+    "z": "bk-tab",
+    "name": "mensagem do Telegram",
+    "bot": "bk-bot",
+    "saveDataDir": "",
+    "filterCommands": false,
+    "hasinput": false,
+    "inputs": 0,
+    "handleallupdates": false,
+    "handleprocessupdates": false,
+    "x": 150,
+    "y": 80,
+    "wires": [
+      [
+        "bk-entrada"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "bk-entrada",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "entrada e config",
+    "func": "// Só mensagens de texto; o resto (fotos, figurinhas...) é ignorado\nconst p = msg.payload || {};\nif (p.type !== \"message\" || typeof p.content !== \"string\" || !p.content.trim()) {\n    return null;\n}\n// O único lugar com configuração de conexão\nmsg.cfg = {\n    baseUrl: env.get(\"ASSISTANTS_BASE_URL\"),\n    apiKey: env.get(\"ASSISTANTS_API_KEY\"),\n    assistantId: env.get(\"BOOKKEEPER_ASSISTANT_ID\")\n};\nconst from = (msg.originalMessage && msg.originalMessage.from) || {};\nmsg.chatId = p.chatId;\nmsg.text = p.content.trim();\nconst name = [from.first_name, from.last_name].filter(Boolean).join(\" \") || from.username || null;\nmsg.params = [from.id || p.chatId, name];\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 80,
+    "wires": [
+      [
+        "bk-pg-user"
+      ]
+    ]
+  },
+  {
+    "id": "bk-pg-user",
+    "type": "postgresql",
+    "z": "bk-tab",
+    "name": "busca ou cria usuário",
+    "query": "INSERT INTO bookkeeper.users (telegram_id, name) VALUES ($1, $2)\nON CONFLICT (telegram_id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()\nRETURNING id, thread_id;",
+    "postgreSQLConfig": "bk-pg",
+    "split": false,
+    "rowsPerMsg": 1,
+    "outputs": 1,
+    "x": 610,
+    "y": 80,
+    "wires": [
+      [
+        "bk-tem-thread"
+      ]
+    ]
+  },
+  {
+    "id": "bk-tem-thread",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "tem thread?",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\nconst user = msg.payload[0];\nmsg.userId = user.id;\nif (user.thread_id) {\n    // Thread conhecida: antes de escrever, olha se há uma run ativa nela\n    msg.threadId = user.thread_id;\n    return [request(msg, \"GET\", \"/threads/\" + msg.threadId + \"/runs?limit=1\"), null];\n}\nreturn [null, request(msg, \"POST\", \"/threads\", {})];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 830,
+    "y": 80,
+    "wires": [
+      [
+        "bk-http-runs"
+      ],
+      [
+        "bk-http-thread"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-runs",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "GET /runs",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1060,
+    "y": 40,
+    "wires": [
+      [
+        "bk-ativa"
+      ]
+    ]
+  },
+  {
+    "id": "bk-ativa",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "run ativa?",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\nconst ACTIVE = [\"queued\", \"in_progress\", \"requires_action\", \"cancelling\"];\nif (msg.statusCode === 404) {\n    // A thread sumiu (servidor sem persistência, por exemplo): começa outra\n    return [null, null, request(msg, \"POST\", \"/threads\", {})];\n}\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nconst run = msg.payload && msg.payload.data && msg.payload.data[0];\nif (!run || !ACTIVE.includes(run.status)) {\n    return [msg, null, null];\n}\n// Uma mensagem nova não entra com run ativa: cancela a anterior e espera terminar\nmsg.waits = 0;\nconst path = \"/threads/\" + msg.threadId + \"/runs/\" + run.id;\nreturn [null, run.status === \"cancelling\" ? request(msg, \"GET\", path) : request(msg, \"POST\", path + \"/cancel\"), null];",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1260,
+    "y": 40,
+    "wires": [
+      [
+        "bk-msg"
+      ],
+      [
+        "bk-http-cancel"
+      ],
+      [
+        "bk-http-thread"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-cancel",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "cancel / GET run",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1060,
+    "y": 140,
+    "wires": [
+      [
+        "bk-cancelada"
+      ]
+    ]
+  },
+  {
+    "id": "bk-cancelada",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "terminou?",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\nconst ACTIVE = [\"queued\", \"in_progress\", \"requires_action\", \"cancelling\"];\n// HTTP errors do not throw in the http request node: report them to the catch node\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nmsg.waits = (msg.waits || 0) + 1;\nif (!ACTIVE.includes(msg.payload.status)) {\n    return [msg, null, null];\n}\nif (msg.waits > 30) {\n    msg.answer = \"Ainda estou terminando a resposta anterior. Tente de novo em instantes.\";\n    return [null, null, msg];\n}\nreturn [null, request(msg, \"GET\", \"/threads/\" + msg.threadId + \"/runs/\" + msg.payload.id), null];",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1260,
+    "y": 140,
+    "wires": [
+      [
+        "bk-msg"
+      ],
+      [
+        "bk-espera-cancel"
+      ],
+      [
+        "bk-telegram"
+      ]
+    ]
+  },
+  {
+    "id": "bk-espera-cancel",
+    "type": "delay",
+    "z": "bk-tab",
+    "name": "espera 500 ms",
+    "pauseType": "delay",
+    "timeout": "500",
+    "timeoutUnits": "milliseconds",
+    "rate": "1",
+    "nbRateUnits": "1",
+    "rateUnits": "second",
+    "randomFirst": "1",
+    "randomLast": "5",
+    "randomUnits": "seconds",
+    "drop": false,
+    "allowrate": false,
+    "outputs": 1,
+    "x": 1060,
+    "y": 200,
+    "wires": [
+      [
+        "bk-http-cancel"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-thread",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "POST /threads",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1060,
+    "y": 280,
+    "wires": [
+      [
+        "bk-guarda-thread"
+      ]
+    ]
+  },
+  {
+    "id": "bk-guarda-thread",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "guarda thread",
+    "func": "// HTTP errors do not throw in the http request node: report them to the catch node\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nmsg.threadId = msg.payload.id;\nmsg.params = [msg.threadId, msg.userId];\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1260,
+    "y": 280,
+    "wires": [
+      [
+        "bk-pg-thread"
+      ]
+    ]
+  },
+  {
+    "id": "bk-pg-thread",
+    "type": "postgresql",
+    "z": "bk-tab",
+    "name": "salva thread do usuário",
+    "query": "UPDATE bookkeeper.users SET thread_id = $1, updated_at = now() WHERE id = $2;",
+    "postgreSQLConfig": "bk-pg",
+    "split": false,
+    "rowsPerMsg": 1,
+    "outputs": 1,
+    "x": 1480,
+    "y": 280,
+    "wires": [
+      [
+        "bk-msg"
+      ]
+    ]
+  },
+  {
+    "id": "bk-msg",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "adiciona mensagem",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\nreturn request(msg, \"POST\", \"/threads/\" + msg.threadId + \"/messages\", { role: \"user\", content: msg.text });",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 150,
+    "y": 400,
+    "wires": [
+      [
+        "bk-http-msg"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-msg",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "POST /messages",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 360,
+    "y": 400,
+    "wires": [
+      [
+        "bk-run"
+      ]
+    ]
+  },
+  {
+    "id": "bk-run",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "cria run",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\n// HTTP errors do not throw in the http request node: report them to the catch node\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nmsg.polls = 0;\nreturn request(msg, \"POST\", \"/threads/\" + msg.threadId + \"/runs\", { assistant_id: msg.cfg.assistantId });",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 400,
+    "wires": [
+      [
+        "bk-http-run"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-run",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "POST /runs",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 760,
+    "y": 400,
+    "wires": [
+      [
+        "bk-poll"
+      ]
+    ]
+  },
+  {
+    "id": "bk-poll",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "consulta a run",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\n// HTTP errors do not throw in the http request node: report them to the catch node\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nif (msg.payload && msg.payload.object === \"thread.run\") {\n    msg.runId = msg.payload.id;\n}\nmsg.polls = (msg.polls || 0) + 1;\nif (msg.polls > 90) {\n    msg.answer = \"Demorei demais para responder. Tente de novo.\";\n    return [null, msg];\n}\nreturn [request(msg, \"GET\", \"/threads/\" + msg.threadId + \"/runs/\" + msg.runId), null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 960,
+    "y": 400,
+    "wires": [
+      [
+        "bk-http-get-run"
+      ],
+      [
+        "bk-telegram"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-get-run",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "GET /runs/{id}",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1170,
+    "y": 400,
+    "wires": [
+      [
+        "bk-status"
+      ]
+    ]
+  },
+  {
+    "id": "bk-status",
+    "type": "switch",
+    "z": "bk-tab",
+    "name": "status?",
+    "property": "payload.status",
+    "propertyType": "msg",
+    "rules": [
+      {
+        "t": "eq",
+        "v": "queued",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "in_progress",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "cancelling",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "requires_action",
+        "vt": "str"
+      },
+      {
+        "t": "eq",
+        "v": "completed",
+        "vt": "str"
+      },
+      {
+        "t": "else"
+      }
+    ],
+    "checkall": "false",
+    "repair": false,
+    "outputs": 6,
+    "x": 1370,
+    "y": 400,
+    "wires": [
+      [
+        "bk-espera-run"
+      ],
+      [
+        "bk-espera-run"
+      ],
+      [
+        "bk-espera-run"
+      ],
+      [
+        "bk-tools"
+      ],
+      [
+        "bk-resposta"
+      ],
+      [
+        "bk-falhou"
+      ]
+    ]
+  },
+  {
+    "id": "bk-espera-run",
+    "type": "delay",
+    "z": "bk-tab",
+    "name": "espera 1000 ms",
+    "pauseType": "delay",
+    "timeout": "1000",
+    "timeoutUnits": "milliseconds",
+    "rate": "1",
+    "nbRateUnits": "1",
+    "rateUnits": "second",
+    "randomFirst": "1",
+    "randomLast": "5",
+    "randomUnits": "seconds",
+    "drop": false,
+    "allowrate": false,
+    "outputs": 1,
+    "x": 1170,
+    "y": 340,
+    "wires": [
+      [
+        "bk-poll"
+      ]
+    ]
+  },
+  {
+    "id": "bk-tools",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "tool calls",
+    "func": "msg.calls = msg.payload.required_action.submit_tool_outputs.tool_calls;\nmsg.outputs = [];\nmsg.callIndex = 0;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 150,
+    "y": 540,
+    "wires": [
+      [
+        "bk-proxima-call"
+      ]
+    ]
+  },
+  {
+    "id": "bk-proxima-call",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "próxima tool",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\n// Uma tool call por vez; quando todas têm resultado, envia submit_tool_outputs\nwhile (msg.callIndex < msg.calls.length) {\n    const call = msg.calls[msg.callIndex];\n    if (call.function.name === \"get_books\") {\n        let args = {};\n        try { args = JSON.parse(call.function.arguments || \"{}\"); } catch (e) { args = {}; }\n        msg.params = [String(args.category || \"\")];\n        return [msg, null];\n    }\n    msg.outputs.push({ tool_call_id: call.id, output: \"Unknown tool '\" + call.function.name + \"'.\" });\n    msg.callIndex++;\n}\nreturn [null, request(msg, \"POST\", \"/threads/\" + msg.threadId + \"/runs/\" + msg.runId + \"/submit_tool_outputs\",\n    { tool_outputs: msg.outputs })];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 360,
+    "y": 540,
+    "wires": [
+      [
+        "bk-pg-books"
+      ],
+      [
+        "bk-http-submit"
+      ]
+    ]
+  },
+  {
+    "id": "bk-pg-books",
+    "type": "postgresql",
+    "z": "bk-tab",
+    "name": "get_books",
+    "query": "SELECT title, author, category, price\nFROM bookkeeper.books\nWHERE category ILIKE '%' || $1 || '%'\nORDER BY title\nLIMIT 20;",
+    "postgreSQLConfig": "bk-pg",
+    "split": false,
+    "rowsPerMsg": 1,
+    "outputs": 1,
+    "x": 580,
+    "y": 500,
+    "wires": [
+      [
+        "bk-saida-livros"
+      ]
+    ]
+  },
+  {
+    "id": "bk-saida-livros",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "resultado da tool",
+    "func": "const call = msg.calls[msg.callIndex];\nconst books = msg.payload || [];\nconst output = books.length\n    ? books.map(b => b.title + \" (\" + b.author + \") - R$ \" + Number(b.price).toFixed(2) + \" - \" + b.category).join(\"\\n\")\n    : \"Nenhum livro encontrado nessa categoria.\";\nmsg.outputs.push({ tool_call_id: call.id, output: output });\nmsg.callIndex++;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 790,
+    "y": 500,
+    "wires": [
+      [
+        "bk-proxima-call"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-submit",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "POST submit_tool_outputs",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 610,
+    "y": 580,
+    "wires": [
+      [
+        "bk-poll"
+      ]
+    ]
+  },
+  {
+    "id": "bk-resposta",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "lê a resposta",
+    "func": "function request(msg, method, path, body) {\n    msg.method = method;\n    msg.url = msg.cfg.baseUrl + path;\n    msg.headers = { \"Authorization\": \"Bearer \" + msg.cfg.apiKey, \"Content-Type\": \"application/json\", \"OpenAI-Beta\": \"assistants=v2\" };\n    if (body === undefined) { delete msg.payload; } else { msg.payload = body; }\n    return msg;\n}\nreturn request(msg, \"GET\", \"/threads/\" + msg.threadId + \"/messages?limit=1\");",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 150,
+    "y": 660,
+    "wires": [
+      [
+        "bk-http-answer"
+      ]
+    ]
+  },
+  {
+    "id": "bk-http-answer",
+    "type": "http request",
+    "z": "bk-tab",
+    "name": "GET /messages",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 360,
+    "y": 660,
+    "wires": [
+      [
+        "bk-texto"
+      ]
+    ]
+  },
+  {
+    "id": "bk-texto",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "texto da resposta",
+    "func": "// HTTP errors do not throw in the http request node: report them to the catch node\nif (msg.statusCode >= 400) {\n    node.error(\"HTTP \" + msg.statusCode + \" on \" + msg.url + \": \" + JSON.stringify(msg.payload), msg);\n    return null;\n}\nconst message = msg.payload.data && msg.payload.data[0];\nconst part = message && message.content && message.content.find(c => c.type === \"text\");\nmsg.answer = part ? part.text.value : \"Não tenho uma resposta agora.\";\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 660,
+    "wires": [
+      [
+        "bk-telegram"
+      ]
+    ]
+  },
+  {
+    "id": "bk-falhou",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "run sem resposta",
+    "func": "// failed, incomplete, expired, cancelled...\nconst error = msg.payload.last_error;\nnode.warn(\"Run \" + msg.runId + \" ended \" + msg.payload.status + (error ? \": \" + error.code + \" \" + error.message : \"\"));\nmsg.answer = \"Não consegui responder agora. Tente de novo em instantes.\";\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 720,
+    "wires": [
+      [
+        "bk-telegram"
+      ]
+    ]
+  },
+  {
+    "id": "bk-telegram",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "mensagem para o Telegram",
+    "func": "msg._replied = true;\nmsg.payload = { chatId: msg.chatId, type: \"message\", content: msg.answer };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1060,
+    "y": 680,
+    "wires": [
+      [
+        "bk-out"
+      ]
+    ]
+  },
+  {
+    "id": "bk-out",
+    "type": "telegram sender",
+    "z": "bk-tab",
+    "name": "responde no Telegram",
+    "bot": "bk-bot",
+    "haserroroutput": false,
+    "outputs": 1,
+    "x": 1290,
+    "y": 680,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "bk-catch",
+    "type": "catch",
+    "z": "bk-tab",
+    "name": "qualquer erro",
+    "scope": null,
+    "uncaught": false,
+    "x": 150,
+    "y": 800,
+    "wires": [
+      [
+        "bk-erro"
+      ]
+    ]
+  },
+  {
+    "id": "bk-erro",
+    "type": "function",
+    "z": "bk-tab",
+    "name": "avisa o usuário",
+    "func": "// Uma vez só: se o próprio envio ao Telegram falhar, não tenta de novo\nif (!msg.chatId || msg._replied) {\n    return null;\n}\nmsg.answer = \"Desculpe, tive um problema para responder. Tente de novo.\";\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 360,
+    "y": 800,
+    "wires": [
+      [
+        "bk-telegram"
+      ]
+    ]
+  }
+]

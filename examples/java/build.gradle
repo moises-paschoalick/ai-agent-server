@@ -1,0 +1,29 @@
+// Exemplos de cliente Java do Agent Server. Rodar a partir da raiz do repositório:
+//   AGENT_API_KEY=<chave> backend/gradlew -p examples/java run
+plugins {
+	id 'application'
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	// SDK oficial da OpenAI: o código escrito para a Assistants API fala com o Agent Server trocando só a base URL e a chave
+	implementation 'com.openai:openai-java:4.80.0'
+}
+
+application {
+	mainClass = 'examples.AssistantsExample'
+}
+
+// Runs from the project root so the .env file next to build.gradle is found
+tasks.named('run') {
+	workingDir = projectDir
+}

@@ -1,0 +1,61 @@
+[
+  {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "City name, e.g. Campinas"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Temperature unit",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["city"]
+    },
+    "strict": false
+  },
+  {
+    "name": "get_order_status",
+    "description": "Get the status of a fictitious order by its id",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "Order id, e.g. A-1001"
+        }
+      },
+      "required": ["order_id"]
+    },
+    "strict": false
+  },
+  {
+    "name": "list_orders",
+    "description": "List fictitious orders created in a time range, optionally filtered by status",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "start_time": {
+          "type": "string",
+          "description": "Range start, ISO 8601 with offset"
+        },
+        "end_time": {
+          "type": "string",
+          "description": "Range end, ISO 8601 with offset"
+        },
+        "status": {
+          "type": ["string", "null"],
+          "description": "Order status filter; null returns every status",
+          "enum": ["pending", "shipped", "delivered", "cancelled", null]
+        }
+      },
+      "required": ["start_time", "end_time"]
+    },
+    "strict": false
+  }
+]

@@ -1,0 +1,60 @@
+# Runs the whole monorepo locally:  docker compose up --build
+#   frontend  http://localhost:3000   (playground; calls /api, proxied to the backend with AGENT_API_KEY)
+#   backend   http://localhost:8080   (sync API and OpenAI-compatible /v1)
+# Settings come from the root .env (see .env.example); tools and assistants survive restarts in the agent-server-data volume.
+# PostgreSQL (everything in the database, AGENT_STORE=postgres):  docker compose --profile postgres up --build
+#   with AGENT_STORE=postgres and DATABASE_URL=postgresql://agent:agent@postgres:5432/agent in .env
+services:
+  backend:
+    build: ./backend
+    image: agent-server:local
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${AGENT_PORT:-8080}:8080"
+    volumes:
+      - agent-server-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false   # only with --profile postgres
+    restart: unless-stopped
+
+  # Optional; pgvector image so RAG can use the vector extension later. No published port: only the backend reaches it.
+  postgres:
+    image: pgvector/pgvector:pg17
+    profiles: [postgres]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+    volumes:
+      - agent-server-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: agent-server-frontend:local
+    environment:
+      BACKEND_URL: http://backend:8080
+      # One of AGENT_API_KEYS; added by the frontend's proxy, never sent to the browser
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      # Optional basic auth for the whole frontend (set both to turn it on)
+      FRONTEND_USER: ${FRONTEND_USER:-}
+      FRONTEND_PASSWORD: ${FRONTEND_PASSWORD:-}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  agent-server-data:
+  agent-server-pg:
