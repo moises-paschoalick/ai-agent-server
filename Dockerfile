@@ -38,7 +38,6 @@ ENV PORT=8080 \
     BACKEND_PORT=8081 \
     AGENT_DATA_DIR=/data \
     JAVA_OPTS="-XX:MaxRAMPercentage=60"
-VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
     CMD curl -fs "http://127.0.0.1:${PORT}/health" || exit 1

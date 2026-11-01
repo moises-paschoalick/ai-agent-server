@@ -19,7 +19,6 @@ WORKDIR /app
 COPY --from=build --chown=app:app /workspace/app.jar app.jar
 USER app
 ENV AGENT_DATA_DIR=/app/data
-VOLUME /app/data
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
     CMD curl -fs "http://localhost:${PORT:-8080}/health" || exit 1
