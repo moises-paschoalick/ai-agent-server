@@ -151,7 +151,7 @@ Then start the container with:
 **Single image:** one service from this repository, root directory `/`, so Railway builds the root `Dockerfile`.
 
 - Variables: the provider key, `AGENT_API_KEYS`, `FRONTEND_USER` and `FRONTEND_PASSWORD`.
-- Add a **volume** mounted at `/data`. Railway mounts volumes as root, so also set `RAILWAY_RUN_UID=0`.
+- Add a **volume** mounted at `/data`. Railway mounts volumes as root, so also set `RAILWAY_RUN_UID=0`: the container then starts as root, hands `/data` to its own user and runs the backend and nginx as that user.
 - Health check path: `/health`.
 
 **With PostgreSQL:** add a PostgreSQL service and set `AGENT_STORE=postgres` and `DATABASE_URL=${{Postgres.DATABASE_URL}}` on the Agent Server service; then the volume is optional (only for the first import from `/data`).

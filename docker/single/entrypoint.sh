@@ -3,6 +3,13 @@
 # The first of the two to exit stops the container, so the platform restarts both.
 set -euo pipefail
 
+# Started as root (e.g. Railway with RAILWAY_RUN_UID=0, whose volumes are owned by root): hand /data
+# to the app user and run everything as that user, as when the image starts normally
+if [ "$(id -u)" = 0 ]; then
+    chown -R app:app "${AGENT_DATA_DIR:-/data}"
+    exec setpriv --reuid=app --regid=app --init-groups "$0" "$@"
+fi
+
 work=/tmp/nginx
 mkdir -p "$work"
 
